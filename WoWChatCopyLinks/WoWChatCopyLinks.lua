@@ -6,6 +6,8 @@ local channels = {
  CHAT_MSG_SAY=true, CHAT_MSG_RAID=true, CHAT_MSG_RAID_LEADER=true,
  CHAT_MSG_BATTLEGROUND=true, CHAT_MSG_BATTLEGROUND_LEADER=true,
  CHAT_MSG_CHANNEL=true,
+ CHAT_MSG_GUILD=true,
+ CHAT_MSG_WHISPER=true, CHAT_MSG_WHISPER_INFORM=true,
 }
 local function Clean(s)
  s = tostring(s or "")
@@ -27,7 +29,7 @@ local function ExtractLinks(s)
  return result
 end
 local ui = CreateFrame("Frame", "WoWChatCopyLinksWindow", UIParent)
-ui:SetWidth(560); ui:SetHeight(440); ui:SetPoint("CENTER"); ui:SetFrameStrata("DIALOG")
+ui:SetWidth(560); ui:SetHeight(535); ui:SetPoint("CENTER"); ui:SetFrameStrata("DIALOG")
 ui:SetMovable(true); ui:EnableMouse(true); ui:RegisterForDrag("LeftButton")
 ui:SetScript("OnDragStart", function(self) self:StartMoving() end)
 ui:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
@@ -109,6 +111,53 @@ local function MakeToggle(label,x,key)
 end
 local copyToggle=MakeToggle("[C] Copy",130,"showCopy")
 local linkToggle=MakeToggle("[L] Links",260,"showLinks")
+-- Twenty independently selectable colors, stored as palette keys in SavedVariables.
+local palette = {
+ {"White", "FFFFFF"}, {"Light Gray", "C0C0C0"}, {"Gray", "808080"},
+ {"Dark Gray", "505050"}, {"Charcoal", "303030"}, {"Black", "000000"},
+ {"Yellow", "FFD100"}, {"Gold", "C49A35"}, {"Orange", "FF8C00"},
+ {"Brown", "80502A"}, {"Red", "FF4040"}, {"Dark Red", "8B2020"},
+ {"Green", "1EFF00"}, {"Dark Green", "176B32"}, {"Blue", "3498FF"},
+ {"Dark Blue", "204A8B"}, {"Purple", "A050E0"},
+ {"Dark Purple", "54277A"}, {"Pink", "FF70CB"}, {"Teal", "247F83"},
+}
+local paletteMap = {}
+for _, color in ipairs(palette) do paletteMap[color[1]] = color[2] end
+local function ColorHex(key, fallback)
+ return paletteMap[DB and DB[key] or ""] or fallback
+end
+local colorTitle=ui:CreateFontString(nil,"OVERLAY","GameFontNormal")
+colorTitle:SetPoint("TOPLEFT",25,-449)
+colorTitle:SetText("Chat Button Colors (changes apply to new messages):")
+local function CreateColorDropdown(key, title, x, default)
+ local label=ui:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall")
+ label:SetPoint("TOPLEFT",x,-469); label:SetText(title)
+ local drop=CreateFrame("Frame","WoWCCLColorDrop"..key,ui,"UIDropDownMenuTemplate")
+ drop:SetPoint("TOPLEFT",x-17,-478)
+ UIDropDownMenu_SetWidth(drop,165)
+ local function Refresh()
+  local selected=(DB and DB[key]) or default
+  UIDropDownMenu_SetText(drop, "|cff"..ColorHex(key,paletteMap[default])..selected.."|r")
+ end
+ UIDropDownMenu_Initialize(drop,function(self,level)
+  for _,color in ipairs(palette) do
+   local name,hex=color[1],color[2]
+   local info=UIDropDownMenu_CreateInfo()
+   info.text="|cff"..hex..name.."|r"
+   info.checked=(DB and DB[key]==name) or (not DB and name==default)
+   info.func=function()
+    if DB then DB[key]=name end
+    Refresh()
+   end
+   UIDropDownMenu_AddButton(info,level)
+  end
+ end)
+ drop:SetScript("OnShow",Refresh)
+ Refresh()
+ return drop
+end
+CreateColorDropdown("copyColor","[C] Copy",25,"Gray")
+CreateColorDropdown("linkColor","[L] Links",275,"Dark Gray")
 local function Push(event,msg,sender,...)
  if event=="CHAT_MSG_CHANNEL" then
   local channelName=select(2,...)
@@ -135,6 +184,8 @@ addon:SetScript("OnEvent",function(self,event,...)
   if DB.radius==nil then DB.radius=80 end
   if DB.showCopy==nil then DB.showCopy=true end
   if DB.showLinks==nil then DB.showLinks=true end
+  if not paletteMap[DB.copyColor] then DB.copyColor="Gray" end
+  if not paletteMap[DB.linkColor] then DB.linkColor="Dark Gray" end
   self:UnregisterEvent("ADDON_LOADED")
   self:RegisterEvent("PLAYER_LOGIN")
  elseif event=="PLAYER_LOGIN" then
@@ -163,7 +214,7 @@ addon:SetScript("OnEvent",function(self,event,...)
   end)
   button:SetScript("OnClick",function() if ui:IsShown() then ui:Hide() else ui:Show(); UpdateRows() end end)
   button:SetScript("OnEnter",function(self)
-   GameTooltip:SetOwner(self,"ANCHOR_LEFT"); GameTooltip:AddLine("WoW Chat Copy & Links"); GameTooltip:AddLine("Click: open history | Drag: move icon",1,1,1); GameTooltip:Show()
+   GameTooltip:SetOwner(self,"ANCHOR_LEFT"); GameTooltip:AddLine("WoW Chat Copy & Links"); GameTooltip:AddLine("Click: open history | Drag: move icon",1,1,1); GameTooltip:AddLine("[C] Copy message  |  [L] Copy link",1,1,1); GameTooltip:AddLine("Select text and press Ctrl+C",1,1,1); GameTooltip:Show()
   end)
   button:SetScript("OnLeave",function() GameTooltip:Hide() end)
   Position()
@@ -183,11 +234,16 @@ end
 -- The link targets our own recent-history entries and never executes external URLs.
 local function ChatCopyFilter(self,event,msg,sender,...)
  if type(msg)~="string" then return false end
+ if event=="CHAT_MSG_CHANNEL" then
+  local channelName=select(2,...)
+  local channelNumber=tonumber(tostring(channelName or ""):match("^(%d+)"))
+  if not channelNumber or channelNumber<1 or channelNumber>7 then return false end
+ end
  local id=nextID
  local entry=byID[id]
  -- Event filters are invoked after our event handler in the usual client dispatch,
  -- but do not assume order: capture a matching message if necessary.
- if not entry or entry.message~=Clean(msg) or entry.sender~=Clean(sender or "Unknown") then
+ if not entry or entry.message~=Clean(msg) or entry.sender~=Clean(sender or "Unknown") or entry.channel~=event:gsub("CHAT_MSG_", "") then
   Push(event,msg,sender,...)
   id=nextID
   entry=byID[id]
@@ -195,10 +251,10 @@ local function ChatCopyFilter(self,event,msg,sender,...)
  if not entry then return false end
  local suffix=""
  if not DB or DB.showCopy~=false then
-  suffix=" |cff66ccff|Hcclcopy:"..id.."|h[C]|h|r"
+  suffix=" |cff"..ColorHex("copyColor","808080").."|Hcclcopy:"..id.."|h[C]|h|r"
  end
  local links=ExtractLinks(Clean(msg))
- if #links>0 and (not DB or DB.showLinks~=false) then suffix=suffix.." |cff66ff99|Hccllink:"..id.."|h[L]|h|r" end
+ if #links>0 and (not DB or DB.showLinks~=false) then suffix=suffix.." |cff"..ColorHex("linkColor","505050").."|Hccllink:"..id.."|h[L]|h|r" end
  return false,msg..suffix,sender,...
 end
 if ChatFrame_AddMessageEventFilter then

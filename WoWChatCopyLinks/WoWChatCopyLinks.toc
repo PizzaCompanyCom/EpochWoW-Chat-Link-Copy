@@ -1,6 +1,6 @@
 ## Interface: 30300
 ## Title: WoW Chat Copy & Links
 ## Notes: Copy chat messages and web links (3.3.5a)
-## Version: 1.1.2
+## Version: 1.1.5
 ## SavedVariables: WoWChatCopyLinksDB
 WoWChatCopyLinks.lua
